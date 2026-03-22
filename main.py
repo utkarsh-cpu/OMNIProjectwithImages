@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import sys
+import warnings
 from dataclasses import fields
 from typing import Any, Iterable, get_args, get_origin, get_type_hints
 
@@ -24,6 +25,14 @@ if not logger.handlers:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+for noisy_logger in ("httpx", "timm", "torch._inductor", "torch._dynamo"):
+    logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Online softmax is disabled on the fly.*",
+)
 
 _DERIVED_PATH_FIELDS = {"omni_csv_path", "sdo_zip_path", "sdo_extracted_dir"}
 

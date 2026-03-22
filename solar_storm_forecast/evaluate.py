@@ -15,14 +15,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast
 from torch.utils.data import DataLoader
 
 from .config import Config
 from .model import SolarStormModel, combined_loss
-from .utils import CSVLogger, flare_class_from_log, get_logger
+from .utils import CSVLogger, flare_class_from_log, get_amp_autocast, get_logger
 
 logger = get_logger(__name__)
+
+
+def _batch_finite_mask(
+    pred: np.ndarray,
+    target: np.ndarray,
+    log_std: np.ndarray,
+) -> np.ndarray:
+    """Return a mask selecting rows with finite prediction, target, and std."""
+    return np.isfinite(pred) & np.isfinite(target) & np.isfinite(log_std)
 
 
 # ---------------------------------------------------------------------------
@@ -48,13 +56,15 @@ def evaluate_epoch(
     all_pred_std: List[float] = []
     total_loss = 0.0
     n_batches = 0
+    skipped_batches = 0
+    skipped_samples = 0
 
     for batch in loader:
         batch_dev = {
             k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
         }
-        with autocast(device_type=device.type, enabled=(device.type == "cuda")):
+        with get_amp_autocast(device):
             outputs = model(
                 images=batch_dev["images"],
                 omni=batch_dev["omni"],
@@ -65,16 +75,52 @@ def evaluate_epoch(
                 target_log_flux=batch_dev["target_log_flux"],
                 target_log_dst=batch_dev["target_log_dst"],
             )
-        total_loss += loss.item()
-        n_batches += 1
+        if not torch.isfinite(loss):
+            skipped_batches += 1
+            skipped_samples += len(batch["target_log_flux"])
+            continue
 
         pred = outputs["flux_pred"].cpu().numpy()
         log_std = outputs["flux_log_std"].cpu().numpy()
         true = batch["target_log_flux"].numpy()
+        finite_mask = _batch_finite_mask(pred, true, log_std)
+        if not finite_mask.any():
+            skipped_batches += 1
+            skipped_samples += len(true)
+            continue
 
-        all_pred_flux.extend(pred.tolist())
-        all_true_flux.extend(true.tolist())
-        all_pred_std.extend(np.exp(log_std).tolist())
+        total_loss += loss.item()
+        n_batches += 1
+        skipped_samples += int((~finite_mask).sum())
+
+        all_pred_flux.extend(pred[finite_mask].tolist())
+        all_true_flux.extend(true[finite_mask].tolist())
+        clipped_std = np.exp(np.clip(log_std[finite_mask], -20.0, 20.0))
+        all_pred_std.extend(clipped_std.tolist())
+
+    if skipped_batches or skipped_samples:
+        logger.warning(
+            "Skipped %d validation batches and %d validation samples with non-finite outputs.",
+            skipped_batches,
+            skipped_samples,
+        )
+
+    if not all_pred_flux:
+        return {
+            "loss": float("inf"),
+            "MAE_log": float("inf"),
+            "RMSE_log": float("inf"),
+            "MAE_physical": float("inf"),
+            "RMSE_physical": float("inf"),
+            "MAE_flare": float("inf"),
+            "RMSE_flare": float("inf"),
+            "TSS": 0.0,
+            "HSS": 0.0,
+            "Hit_Rate": 0.0,
+            "False_Alarm_Rate": 0.0,
+            "PICP_90": 0.0,
+            "MPIW_90": 0.0,
+        }
 
     pred_arr = np.array(all_pred_flux)
     true_arr = np.array(all_true_flux)
@@ -107,6 +153,7 @@ def full_evaluation(
     all_true: List[float] = []
     all_std: List[float] = []
     all_ids: List[str] = []
+    skipped_samples = 0
 
     with torch.no_grad():
         for batch in loader:
@@ -114,16 +161,34 @@ def full_evaluation(
                 k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
-            with autocast(device_type=device.type, enabled=(device.type == "cuda")):
+            with get_amp_autocast(device):
                 outputs = model(
                     images=batch_dev["images"],
                     omni=batch_dev["omni"],
                     image_mask=batch_dev["image_mask"],
                 )
-            all_pred.extend(outputs["flux_pred"].cpu().tolist())
-            all_true.extend(batch["target_log_flux"].tolist())
-            all_std.extend(np.exp(outputs["flux_log_std"].cpu().numpy()).tolist())
-            all_ids.extend(batch["sample_id"])
+            pred = outputs["flux_pred"].cpu().numpy()
+            true = batch["target_log_flux"].numpy()
+            log_std = outputs["flux_log_std"].cpu().numpy()
+            finite_mask = _batch_finite_mask(pred, true, log_std)
+            skipped_samples += int((~finite_mask).sum())
+            if not finite_mask.any():
+                continue
+
+            all_pred.extend(pred[finite_mask].tolist())
+            all_true.extend(true[finite_mask].tolist())
+            all_std.extend(np.exp(np.clip(log_std[finite_mask], -20.0, 20.0)).tolist())
+            all_ids.extend([
+                sample_id
+                for sample_id, keep in zip(batch["sample_id"], finite_mask.tolist())
+                if keep
+            ])
+
+    if skipped_samples:
+        logger.warning("Skipped %d evaluation samples with non-finite outputs.", skipped_samples)
+
+    if not all_pred:
+        raise RuntimeError("Evaluation produced no finite predictions.")
 
     pred_arr = np.array(all_pred)
     true_arr = np.array(all_true)
@@ -160,6 +225,30 @@ def compute_metrics(
     cfg: Config,
 ) -> Dict[str, float]:
     """Compute all specified metrics and return as a dict."""
+    finite_mask = (
+        np.isfinite(pred_log)
+        & np.isfinite(true_log)
+        & np.isfinite(pred_std)
+    )
+    pred_log = pred_log[finite_mask]
+    true_log = true_log[finite_mask]
+    pred_std = pred_std[finite_mask]
+    if pred_log.size == 0:
+        return {
+            "MAE_log": float("inf"),
+            "RMSE_log": float("inf"),
+            "MAE_physical": float("inf"),
+            "RMSE_physical": float("inf"),
+            "MAE_flare": float("inf"),
+            "RMSE_flare": float("inf"),
+            "TSS": 0.0,
+            "HSS": 0.0,
+            "Hit_Rate": 0.0,
+            "False_Alarm_Rate": 0.0,
+            "PICP_90": 0.0,
+            "MPIW_90": 0.0,
+        }
+
     # ── Regression (log-space) ─────────────────────────────────────────
     residual_log = pred_log - true_log
     mae_log = float(np.mean(np.abs(residual_log)))

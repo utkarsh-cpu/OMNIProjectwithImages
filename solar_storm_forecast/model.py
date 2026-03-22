@@ -196,6 +196,8 @@ class Decoder(nn.Module):
 
     def __init__(self, cfg: Config) -> None:
         super().__init__()
+        self.log_std_min = -6.0
+        self.log_std_max = 6.0
         self.shared = nn.Sequential(
             nn.Linear(cfg.decoder_hidden, cfg.decoder_out),
             nn.GELU(),
@@ -230,9 +232,13 @@ class Decoder(nn.Module):
         h = self.shared(x)
         return {
             "dst_pred": self.head_point(h),
-            "dst_log_std": self.head_log_std(h),
+            "dst_log_std": self.head_log_std(h).clamp(
+                min=self.log_std_min, max=self.log_std_max
+            ),
             "flux_pred": self.head_flux(h).squeeze(-1),
-            "flux_log_std": self.head_flux_log_std(h).squeeze(-1),
+            "flux_log_std": self.head_flux_log_std(h).squeeze(-1).clamp(
+                min=self.log_std_min, max=self.log_std_max
+            ),
         }
 
 

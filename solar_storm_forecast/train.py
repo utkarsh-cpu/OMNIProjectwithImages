@@ -9,7 +9,6 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch.utils.data import DataLoader
 
@@ -26,8 +25,10 @@ from .evaluate import evaluate_epoch
 from .model import SolarStormModel, combined_loss
 from .utils import (
     CSVLogger,
+    get_amp_autocast,
     RobustScaler,
     get_device,
+    get_grad_scaler,
     get_logger,
     load_channel_stats,
     seed_everything,
@@ -56,7 +57,7 @@ def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
-    scaler: GradScaler,
+    scaler: object,
     device: torch.device,
     cfg: Config,
 ) -> float:
@@ -69,7 +70,7 @@ def train_one_epoch(
         batch = _to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
 
-        with autocast(device_type=device.type, enabled=(device.type == "cuda")):
+        with get_amp_autocast(device):
             outputs = model(
                 images=batch["images"],
                 omni=batch["omni"],
@@ -184,7 +185,7 @@ def train(cfg: Optional[Config] = None) -> str:
     scheduler = CosineAnnealingWarmRestarts(
         optimizer, T_0=cfg.lr_t0, T_mult=cfg.lr_t_mult
     )
-    amp_scaler = GradScaler(enabled=(device.type == "cuda"))
+    amp_scaler = get_grad_scaler(device)
 
     # ── 5. Logging ────────────────────────────────────────────────────
     csv_cols = [

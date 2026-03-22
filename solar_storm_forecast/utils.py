@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 import logging
 import os
 import random
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -37,6 +38,25 @@ def get_device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def get_amp_autocast(device: torch.device) -> Any:
+    """Return an autocast context manager compatible with the installed PyTorch."""
+    if device.type != "cuda":
+        return nullcontext()
+    try:
+        return torch.amp.autocast(device_type=device.type)
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.autocast()
+
+
+def get_grad_scaler(device: torch.device) -> Any:
+    """Return a GradScaler compatible with the installed PyTorch."""
+    enabled = (device.type == "cuda")
+    try:
+        return torch.amp.GradScaler(device.type, enabled=enabled)
+    except (AttributeError, TypeError):
+        return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -47,6 +67,7 @@ def get_logger(name: str, log_file: Optional[str] = None) -> logging.Logger:
     if logger.handlers:
         return logger
     logger.setLevel(logging.INFO)
+    logger.propagate = False
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s",
                             datefmt="%Y-%m-%d %H:%M:%S")
     ch = logging.StreamHandler()
