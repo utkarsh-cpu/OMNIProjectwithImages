@@ -43,14 +43,14 @@ def get_amp_autocast(device: torch.device) -> Any:
     if device.type != "cuda":
         return nullcontext()
     try:
-        return torch.amp.autocast(device_type=device.type)
+        return torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16)
     except (AttributeError, TypeError):
-        return torch.cuda.amp.autocast()
+        return torch.cuda.amp.autocast(dtype=torch.bfloat16)
 
 
 def get_grad_scaler(device: torch.device) -> Any:
-    """Return a GradScaler compatible with the installed PyTorch."""
-    enabled = (device.type == "cuda")
+    """Return a disabled GradScaler; bfloat16 autocast does not require scaling."""
+    enabled = False
     try:
         return torch.amp.GradScaler(device.type, enabled=enabled)
     except (AttributeError, TypeError):

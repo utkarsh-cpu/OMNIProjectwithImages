@@ -83,8 +83,8 @@ class Config:
     batch_size: int = 16
     epochs: int = 60
     lr: float = 1e-4
-    weight_decay: float = 1e-5
-    dropout: float = 0.1
+    weight_decay: float = 1e-4
+    dropout: float = 0.3
     early_stopping_patience: int = 10
     grad_clip_norm: float = 1.0
     num_workers: int = 4
@@ -97,6 +97,7 @@ class Config:
     flare_oversample_factor: int = 2
     asymmetric_alpha: float = 1.2
     flare_threshold: float = 1e-6
+    decision_threshold: float = 5e-6
     aug_brightness: float = 0.15
     aug_contrast: float = 0.10
     aug_rotation_deg: float = 5.0
