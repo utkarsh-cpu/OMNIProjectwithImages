@@ -236,7 +236,7 @@ def _extract_sample_longitude(
     row: pd.Series,
     normalised_columns: Dict[str, str],
 ) -> Optional[float]:
-    """Extract a central-meridian-relative longitude when metadata provides one."""
+    """Extract a longitude assuming 0° corresponds to the central meridian."""
     lon_candidates = (
         "lon",
         "longitude",
@@ -264,7 +264,8 @@ def _extract_sample_longitude(
     if raw_lon is None or not np.isfinite(raw_lon):
         return None
 
-    # Normalise longitudes such as [0, 360) into [-180, 180) around central meridian.
+    # Normalise longitudes such as [0, 360) into [-180, 180) with the
+    # central-meridian convention anchored at 0°.
     return ((raw_lon + 180.0) % 360.0) - 180.0
 
 
@@ -374,6 +375,8 @@ class SolarDataset(Dataset):
 
             if has_longitude_metadata:
                 longitude = _extract_sample_longitude(row, normalised_columns)
+                # Keep only regions within ±40° of the central meridian because
+                # farther longitude active regions are less likely to be Earth-directed.
                 if longitude is None or abs(longitude) > 40.0:
                     continue
 
@@ -429,7 +432,8 @@ class SolarDataset(Dataset):
 
         if len(timestamps) < self.cfg.image_timesteps:
             raise ValueError(
-                f"Sample {sid} has only {len(timestamps)} unique timestamps; "
+                f"Sample {sid} was expected to be filtered before loading but "
+                f"has only {len(timestamps)} unique timestamps; "
                 f"expected at least {self.cfg.image_timesteps}."
             )
 
