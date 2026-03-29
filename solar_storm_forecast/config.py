@@ -82,7 +82,7 @@ class Config:
     # ── Training ────────────────────────────────────────────────────────
     batch_size: int = 16
     epochs: int = 60
-    lr: float = 3e-4
+    lr: float = 1e-4
     weight_decay: float = 1e-5
     dropout: float = 0.1
     early_stopping_patience: int = 10
@@ -94,7 +94,8 @@ class Config:
     lr_t_mult: int = 2
 
     # ── Augmentation ────────────────────────────────────────────────────
-    flare_oversample_factor: int = 3
+    flare_oversample_factor: int = 2
+    asymmetric_alpha: float = 1.2
     flare_threshold: float = 1e-6
     aug_brightness: float = 0.15
     aug_contrast: float = 0.10

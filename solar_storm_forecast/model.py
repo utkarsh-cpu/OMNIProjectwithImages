@@ -197,7 +197,7 @@ class Decoder(nn.Module):
     def __init__(self, cfg: Config) -> None:
         super().__init__()
         self.log_std_min = -6.0
-        self.log_std_max = 6.0
+        self.log_std_max = 2.0
         self.shared = nn.Sequential(
             nn.Linear(cfg.decoder_hidden, cfg.decoder_out),
             nn.GELU(),
@@ -337,7 +337,7 @@ def gaussian_nll(
 
     Used as an auxiliary loss to train the uncertainty head.
     """
-    std = torch.exp(log_std).clamp(min=1e-6)
+    std = torch.exp(log_std) + 1e-6
     return (0.5 * ((target - pred) / std) ** 2 + log_std).mean()
 
 
@@ -345,7 +345,8 @@ def combined_loss(
     outputs: Dict[str, torch.Tensor],
     target_log_flux: torch.Tensor,
     target_log_dst: torch.Tensor,
-    alpha: float = 2.0,
+    cfg: Optional[Config] = None,
+    alpha: Optional[float] = None,
     dst_weight: float = 0.5,
     nll_weight: float = 0.1,
 ) -> torch.Tensor:
@@ -360,6 +361,9 @@ def combined_loss(
     target_log_dst : Tensor
         ``(B, forecast_y)``
     """
+    if alpha is None:
+        alpha = cfg.asymmetric_alpha if cfg is not None else 2.0
+
     # Flux loss
     flux_mae = asymmetric_log_mae(outputs["flux_pred"], target_log_flux, alpha)
     flux_nll = gaussian_nll(
