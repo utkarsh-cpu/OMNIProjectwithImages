@@ -337,7 +337,7 @@ def gaussian_nll(
 
     Used as an auxiliary loss to train the uncertainty head.
     """
-    std = torch.exp(log_std) + 1e-6
+    std = (torch.exp(log_std) + 1e-6).clamp(min=1e-6)
     return (0.5 * ((target - pred) / std) ** 2 + log_std).mean()
 
 
@@ -360,6 +360,11 @@ def combined_loss(
         ``(B,)``
     target_log_dst : Tensor
         ``(B, forecast_y)``
+    cfg : Config, optional
+        Supplies ``asymmetric_alpha`` when ``alpha`` is not passed explicitly.
+    alpha : float, optional
+        Explicit asymmetric penalty. Falls back to ``cfg.asymmetric_alpha`` and
+        finally ``2.0`` if neither override is provided.
     """
     if alpha is None:
         alpha = cfg.asymmetric_alpha if cfg is not None else 2.0
