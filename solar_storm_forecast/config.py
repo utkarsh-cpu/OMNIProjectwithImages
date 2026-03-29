@@ -97,7 +97,7 @@ class Config:
     flare_oversample_factor: int = 2
     asymmetric_alpha: float = 1.2
     flare_threshold: float = 1e-6
-    decision_threshold: float = 5e-6
+    decision_threshold: float = 5e-6  # prediction cutoff; ground truth still uses flare_threshold
     aug_brightness: float = 0.15
     aug_contrast: float = 0.10
     aug_rotation_deg: float = 5.0

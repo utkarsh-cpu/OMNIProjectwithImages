@@ -82,8 +82,8 @@ def evaluate_epoch(
             skipped_samples += len(batch["target_log_flux"])
             continue
 
-        pred = outputs["flux_pred"].float().cpu().numpy()
-        log_std = outputs["flux_log_std"].float().cpu().numpy()
+        pred = outputs["flux_pred"].cpu().float().numpy()
+        log_std = outputs["flux_log_std"].cpu().float().numpy()
         true = batch["target_log_flux"].numpy()
         finite_mask = _batch_finite_mask(pred, true, log_std)
         if not finite_mask.any():
@@ -170,9 +170,9 @@ def full_evaluation(
                     omni=batch_dev["omni"],
                     image_mask=batch_dev["image_mask"],
                 )
-            pred = outputs["flux_pred"].float().cpu().numpy()
+            pred = outputs["flux_pred"].cpu().float().numpy()
             true = batch["target_log_flux"].numpy()
-            log_std = outputs["flux_log_std"].float().cpu().numpy()
+            log_std = outputs["flux_log_std"].cpu().float().numpy()
             finite_mask = _batch_finite_mask(pred, true, log_std)
             skipped_samples += int((~finite_mask).sum())
             if not finite_mask.any():
