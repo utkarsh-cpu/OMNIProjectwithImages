@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 
 from .config import Config
 from .model import SolarStormModel, combined_loss
-from .utils import CSVLogger, flare_class_from_log, get_amp_autocast, get_logger
+from .utils import CSVLogger, flare_class_from_log, get_logger
 
 logger = get_logger(__name__)
 
@@ -64,17 +64,17 @@ def evaluate_epoch(
             k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
         }
-        with get_amp_autocast(device):
-            outputs = model(
-                images=batch_dev["images"],
-                omni=batch_dev["omni"],
-                image_mask=batch_dev["image_mask"],
-            )
-            loss = combined_loss(
-                outputs,
-                target_log_flux=batch_dev["target_log_flux"],
-                target_log_dst=batch_dev["target_log_dst"],
-            )
+        outputs = model(
+            images=batch_dev["images"],
+            omni=batch_dev["omni"],
+            image_mask=batch_dev["image_mask"],
+        )
+        loss = combined_loss(
+            outputs,
+            target_log_flux=batch_dev["target_log_flux"],
+            target_log_dst=batch_dev["target_log_dst"],
+            cfg=cfg,
+        )
         if not torch.isfinite(loss):
             skipped_batches += 1
             skipped_samples += len(batch["target_log_flux"])
@@ -161,12 +161,11 @@ def full_evaluation(
                 k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
-            with get_amp_autocast(device):
-                outputs = model(
-                    images=batch_dev["images"],
-                    omni=batch_dev["omni"],
-                    image_mask=batch_dev["image_mask"],
-                )
+            outputs = model(
+                images=batch_dev["images"],
+                omni=batch_dev["omni"],
+                image_mask=batch_dev["image_mask"],
+            )
             pred = outputs["flux_pred"].cpu().numpy()
             true = batch["target_log_flux"].numpy()
             log_std = outputs["flux_log_std"].cpu().numpy()
@@ -257,8 +256,10 @@ def compute_metrics(
     # ── Regression (physical space) ───────────────────────────────────
     pred_phys = 10.0 ** pred_log
     true_phys = 10.0 ** true_log
-    mae_physical = float(np.mean(np.abs(pred_phys - true_phys)))
-    rmse_physical = float(np.sqrt(np.mean((pred_phys - true_phys) ** 2)))
+    pred_phys_micro = pred_phys * 1e6
+    true_phys_micro = true_phys * 1e6
+    mae_physical = float(np.mean(np.abs(pred_phys_micro - true_phys_micro)))
+    rmse_physical = float(np.sqrt(np.mean((pred_phys_micro - true_phys_micro) ** 2)))
 
     # ── Storm-event metrics (flare-only) ──────────────────────────────
     flare_mask = true_phys > cfg.flare_threshold

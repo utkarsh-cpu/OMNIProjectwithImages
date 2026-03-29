@@ -1,4 +1,4 @@
-"""Training loop with early stopping, mixed precision, LR schedule, and checkpointing."""
+"""Training loop with early stopping, LR schedule, and checkpointing."""
 
 from __future__ import annotations
 
@@ -25,10 +25,8 @@ from .evaluate import evaluate_epoch
 from .model import SolarStormModel, combined_loss
 from .utils import (
     CSVLogger,
-    get_amp_autocast,
     RobustScaler,
     get_device,
-    get_grad_scaler,
     get_logger,
     load_channel_stats,
     seed_everything,
@@ -57,7 +55,6 @@ def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
-    scaler: object,
     device: torch.device,
     cfg: Config,
 ) -> float:
@@ -70,23 +67,21 @@ def train_one_epoch(
         batch = _to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
 
-        with get_amp_autocast(device):
-            outputs = model(
-                images=batch["images"],
-                omni=batch["omni"],
-                image_mask=batch["image_mask"],
-            )
-            loss = combined_loss(
-                outputs,
-                target_log_flux=batch["target_log_flux"],
-                target_log_dst=batch["target_log_dst"],
-            )
+        outputs = model(
+            images=batch["images"],
+            omni=batch["omni"],
+            image_mask=batch["image_mask"],
+        )
+        loss = combined_loss(
+            outputs,
+            target_log_flux=batch["target_log_flux"],
+            target_log_dst=batch["target_log_dst"],
+            cfg=cfg,
+        )
 
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
+        loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm)
-        scaler.step(optimizer)
-        scaler.update()
+        optimizer.step()
 
         total_loss += loss.item()
         n_batches += 1
@@ -106,7 +101,7 @@ def train(cfg: Optional[Config] = None) -> str:
     1. Seed everything
     2. Load / compute channel stats & OMNI scaler
     3. Build datasets & data loaders
-    4. Instantiate model, optimizer, scheduler, scaler
+    4. Instantiate model, optimizer, and scheduler
     5. Training loop with early stopping
     6. Save best checkpoint by ``val_mae_flare``
     """
@@ -185,7 +180,6 @@ def train(cfg: Optional[Config] = None) -> str:
     scheduler = CosineAnnealingWarmRestarts(
         optimizer, T_0=cfg.lr_t0, T_mult=cfg.lr_t_mult
     )
-    amp_scaler = get_grad_scaler(device)
 
     # ── 5. Logging ────────────────────────────────────────────────────
     csv_cols = [
@@ -205,7 +199,7 @@ def train(cfg: Optional[Config] = None) -> str:
         t0 = time.time()
 
         train_loss = train_one_epoch(
-            model, train_loader, optimizer, amp_scaler, device, cfg
+            model, train_loader, optimizer, device, cfg
         )
         scheduler.step()
 
