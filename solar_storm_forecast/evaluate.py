@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 
 from .config import Config
 from .model import SolarStormModel, combined_loss
-from .utils import CSVLogger, flare_class_from_log, get_logger
+from .utils import CSVLogger, flare_class_from_log, get_amp_autocast, get_logger
 
 logger = get_logger(__name__)
 
@@ -51,6 +51,7 @@ def evaluate_epoch(
     ``RMSE_flare``, ``PICP_90``, ``MPIW_90``.
     """
     model.eval()
+    amp_autocast = get_amp_autocast(device)
     all_pred_flux: List[float] = []
     all_true_flux: List[float] = []
     all_pred_std: List[float] = []
@@ -64,24 +65,25 @@ def evaluate_epoch(
             k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
             for k, v in batch.items()
         }
-        outputs = model(
-            images=batch_dev["images"],
-            omni=batch_dev["omni"],
-            image_mask=batch_dev["image_mask"],
-        )
-        loss = combined_loss(
-            outputs,
-            target_log_flux=batch_dev["target_log_flux"],
-            target_log_dst=batch_dev["target_log_dst"],
-            cfg=cfg,
-        )
+        with amp_autocast:
+            outputs = model(
+                images=batch_dev["images"],
+                omni=batch_dev["omni"],
+                image_mask=batch_dev["image_mask"],
+            )
+            loss = combined_loss(
+                outputs,
+                target_log_flux=batch_dev["target_log_flux"],
+                target_log_dst=batch_dev["target_log_dst"],
+                cfg=cfg,
+            )
         if not torch.isfinite(loss):
             skipped_batches += 1
             skipped_samples += len(batch["target_log_flux"])
             continue
 
-        pred = outputs["flux_pred"].cpu().numpy()
-        log_std = outputs["flux_log_std"].cpu().numpy()
+        pred = outputs["flux_pred"].cpu().float().numpy()
+        log_std = outputs["flux_log_std"].cpu().float().numpy()
         true = batch["target_log_flux"].numpy()
         finite_mask = _batch_finite_mask(pred, true, log_std)
         if not finite_mask.any():
@@ -149,6 +151,7 @@ def full_evaluation(
     os.makedirs(output_dir, exist_ok=True)
 
     model.eval()
+    amp_autocast = get_amp_autocast(device)
     all_pred: List[float] = []
     all_true: List[float] = []
     all_std: List[float] = []
@@ -161,14 +164,15 @@ def full_evaluation(
                 k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
                 for k, v in batch.items()
             }
-            outputs = model(
-                images=batch_dev["images"],
-                omni=batch_dev["omni"],
-                image_mask=batch_dev["image_mask"],
-            )
-            pred = outputs["flux_pred"].cpu().numpy()
+            with amp_autocast:
+                outputs = model(
+                    images=batch_dev["images"],
+                    omni=batch_dev["omni"],
+                    image_mask=batch_dev["image_mask"],
+                )
+            pred = outputs["flux_pred"].cpu().float().numpy()
             true = batch["target_log_flux"].numpy()
-            log_std = outputs["flux_log_std"].cpu().numpy()
+            log_std = outputs["flux_log_std"].cpu().float().numpy()
             finite_mask = _batch_finite_mask(pred, true, log_std)
             skipped_samples += int((~finite_mask).sum())
             if not finite_mask.any():
@@ -271,9 +275,10 @@ def compute_metrics(
         rmse_flare = rmse_log
 
     # ── Binary classification (storm / no-storm) ─────────────────────
-    log_threshold = np.log10(cfg.flare_threshold)
-    y_true_bin = (true_log >= log_threshold).astype(int)
-    y_pred_bin = (pred_log >= log_threshold).astype(int)
+    truth_log_threshold = np.log10(cfg.flare_threshold)
+    pred_log_threshold = np.log10(cfg.decision_threshold)
+    y_true_bin = (true_log >= truth_log_threshold).astype(int)
+    y_pred_bin = (pred_log >= pred_log_threshold).astype(int)
 
     tp = int(((y_pred_bin == 1) & (y_true_bin == 1)).sum())
     fp = int(((y_pred_bin == 1) & (y_true_bin == 0)).sum())
@@ -349,9 +354,10 @@ def _plot_confusion_matrix(
     output_dir: str,
 ) -> None:
     """Save binary confusion matrix (storm / no-storm)."""
-    log_th = np.log10(cfg.flare_threshold)
-    y_true = (true_log >= log_th).astype(int)
-    y_pred = (pred_log >= log_th).astype(int)
+    truth_log_threshold = np.log10(cfg.flare_threshold)
+    pred_log_threshold = np.log10(cfg.decision_threshold)
+    y_true = (true_log >= truth_log_threshold).astype(int)
+    y_pred = (pred_log >= pred_log_threshold).astype(int)
 
     tp = int(((y_pred == 1) & (y_true == 1)).sum())
     fp = int(((y_pred == 1) & (y_true == 0)).sum())

@@ -26,7 +26,9 @@ from .model import SolarStormModel, combined_loss
 from .utils import (
     CSVLogger,
     RobustScaler,
+    get_amp_autocast,
     get_device,
+    get_grad_scaler,
     get_logger,
     load_channel_stats,
     seed_everything,
@@ -60,6 +62,8 @@ def train_one_epoch(
 ) -> float:
     """Run one training epoch. Returns average loss."""
     model.train()
+    amp_autocast = get_amp_autocast(device)
+    amp_scaler = get_grad_scaler(device)
     total_loss = 0.0
     n_batches = 0
 
@@ -67,21 +71,24 @@ def train_one_epoch(
         batch = _to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
 
-        outputs = model(
-            images=batch["images"],
-            omni=batch["omni"],
-            image_mask=batch["image_mask"],
-        )
-        loss = combined_loss(
-            outputs,
-            target_log_flux=batch["target_log_flux"],
-            target_log_dst=batch["target_log_dst"],
-            cfg=cfg,
-        )
+        with amp_autocast:
+            outputs = model(
+                images=batch["images"],
+                omni=batch["omni"],
+                image_mask=batch["image_mask"],
+            )
+            loss = combined_loss(
+                outputs,
+                target_log_flux=batch["target_log_flux"],
+                target_log_dst=batch["target_log_dst"],
+                cfg=cfg,
+            )
 
-        loss.backward()
+        amp_scaler.scale(loss).backward()
+        amp_scaler.unscale_(optimizer)
         nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm)
-        optimizer.step()
+        amp_scaler.step(optimizer)
+        amp_scaler.update()
 
         total_loss += loss.item()
         n_batches += 1
