@@ -41,7 +41,8 @@ class Config:
 
     # ── Data ────────────────────────────────────────────────────────────
     look_back_x: int = 24          # OMNI2 hours of history
-    forecast_y: int = 6            # hours ahead to forecast
+    forecast_y: int = 24           # hours ahead to forecast
+    propagation_delay_hours: int = 48  # Sun-to-Earth transit delay before Dst forecast
     image_timesteps: int = 4       # fixed by SDOBenchmark structure
     image_channels: int = 5        # AIA 131,171,193,211 + HMI mag
     image_size: int = 256          # fixed by dataset

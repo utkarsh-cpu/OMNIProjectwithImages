@@ -227,6 +227,47 @@ def _discover_timesteps(sample_dir: str) -> List[str]:
     return timestamps[:4]  # take at most 4
 
 
+def _normalise_meta_name(name: str) -> str:
+    """Return a case-insensitive, punctuation-free metadata column key."""
+    return re.sub(r"[^a-z0-9]+", "", str(name).strip().lower())
+
+
+def _extract_sample_longitude(
+    row: pd.Series,
+    normalised_columns: Dict[str, str],
+) -> Optional[float]:
+    """Extract a central-meridian-relative longitude when metadata provides one."""
+    lon_candidates = (
+        "lon",
+        "longitude",
+        "hglon",
+        "hglongitude",
+        "heliolon",
+        "heliographiclon",
+        "heliographiclongitude",
+        "stonyhurstlon",
+        "stonyhurstlongitude",
+        "hgslon",
+    )
+
+    raw_lon: Optional[float] = None
+    for candidate in lon_candidates:
+        col = normalised_columns.get(candidate)
+        if col is None:
+            continue
+        try:
+            raw_lon = float(row[col])
+        except (TypeError, ValueError):
+            return None
+        break
+
+    if raw_lon is None or not np.isfinite(raw_lon):
+        return None
+
+    # Normalise longitudes such as [0, 360) into [-180, 180) around central meridian.
+    return ((raw_lon + 180.0) % 360.0) - 180.0
+
+
 def _parse_sdo_ts(ts_str: str) -> Optional[datetime]:
     """Parse an SDO filename timestamp like ``2012-01-01T070600`` into datetime."""
     for fmt in ("%Y-%m-%dT%H%M%S", "%Y-%m-%dT%H:%M:%S",
@@ -305,6 +346,24 @@ class SolarDataset(Dataset):
         3. Its OMNI2 window (ending at the last timestamp) has no gap > max_gap.
         """
         valid: List[Dict[str, Any]] = []
+        normalised_columns = {
+            _normalise_meta_name(col): str(col) for col in self.meta.columns
+        }
+        has_longitude_metadata = any(
+            key in normalised_columns
+            for key in (
+                "lon",
+                "longitude",
+                "hglon",
+                "hglongitude",
+                "heliolon",
+                "heliographiclon",
+                "heliographiclongitude",
+                "stonyhurstlon",
+                "stonyhurstlongitude",
+                "hgslon",
+            )
+        )
         for idx in range(len(self.meta)):
             row = self.meta.iloc[idx]
             sid = str(row["id"])
@@ -313,8 +372,13 @@ class SolarDataset(Dataset):
             if sdir is None:
                 continue
 
+            if has_longitude_metadata:
+                longitude = _extract_sample_longitude(row, normalised_columns)
+                if longitude is None or abs(longitude) > 40.0:
+                    continue
+
             timestamps = _discover_timesteps(sdir)
-            if not timestamps:
+            if len(timestamps) < self.cfg.image_timesteps:
                 continue
 
             # Use the last available timestamp as t4 for OMNI2 alignment
@@ -363,9 +427,11 @@ class SolarDataset(Dataset):
             dtype=torch.bool,
         )
 
-        # Pad timestamps to exactly 4 (repeat last if fewer)
-        while len(timestamps) < self.cfg.image_timesteps:
-            timestamps.append(timestamps[-1])
+        if len(timestamps) < self.cfg.image_timesteps:
+            raise ValueError(
+                f"Sample {sid} has only {len(timestamps)} unique timestamps; "
+                f"expected at least {self.cfg.image_timesteps}."
+            )
 
         for t_idx, ts_str in enumerate(timestamps[: self.cfg.image_timesteps]):
             for ch_idx, ch_name in enumerate(self.cfg.selected_channels):
@@ -468,7 +534,7 @@ class SolarDataset(Dataset):
 
         # --- target Dst curve (future forecast_y hours) ---
         future_idx = pd.date_range(
-            start=t4 + timedelta(hours=1),
+            start=t4 + timedelta(hours=self.cfg.propagation_delay_hours),
             periods=self.cfg.forecast_y,
             freq="h",
         )
