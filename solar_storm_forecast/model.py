@@ -1,6 +1,7 @@
 """Dual-branch spatio-temporal fusion model for solar storm forecasting.
 
-Branch 1 — Spatial: EfficientNet-B3 (5-channel input) applied to 4 time-steps.
+Branch 1 — Spatial: EfficientNet or Transformer backbone (5-channel input)
+applied to 4 time-steps.
 Branch 2 — Temporal: Bidirectional LSTM over OMNI2 time series.
 Fusion   — Cross-attention  + MLP decoder with two heads (point & uncertainty).
 """
@@ -23,32 +24,56 @@ from .config import Config
 
 
 class ImageEncoder(nn.Module):
-    """EfficientNet-B3 adapted to 5-channel solar images.
-
-    Pretrained ImageNet weights are loaded and the first conv layer is
-    adapted by averaging the 3-channel weights across the 5 new input
-    channels.  The last 2 blocks are unfrozen for fine-tuning.
-    """
+    """Backbone encoder adapted to 5-channel solar images."""
 
     def __init__(self, cfg: Config) -> None:
         super().__init__()
+        self.cfg = cfg
+        self.model_backbone = cfg.model_backbone.lower()
+        backbone_name, backbone_kwargs = self._resolve_backbone_config(cfg)
         self.backbone = timm.create_model(
-            cfg.efficientnet_variant,
-            pretrained=True,
-            in_chans=cfg.image_channels,
-            num_classes=0,          # strip classifier → global pool output
-            global_pool="avg",
+            backbone_name,
+            **backbone_kwargs,
         )
-        backbone_out_dim = self.backbone.num_features  # 1536 for effnet-b3
-        self.proj = nn.Linear(backbone_out_dim, cfg.image_feature_dim)
+        self.backbone_out_dim = self.backbone.num_features
+        self.proj = (
+            nn.Identity()
+            if self.backbone_out_dim == cfg.image_feature_dim
+            else nn.Linear(self.backbone_out_dim, cfg.image_feature_dim)
+        )
 
         self._freeze_early_blocks()
 
     # ------------------------------------------------------------------
+    def _resolve_backbone_config(self, cfg: Config) -> Tuple[str, Dict[str, object]]:
+        backbone_kwargs: Dict[str, object] = {
+            "pretrained": True,
+            "in_chans": cfg.image_channels,
+            "num_classes": 0,
+            "global_pool": "avg",
+        }
+        if self.model_backbone == "efficientnet":
+            return cfg.efficientnet_variant, backbone_kwargs
+        if self.model_backbone in {"transformer", "swin", "vit"}:
+            backbone_kwargs["img_size"] = cfg.image_size
+            return cfg.transformer_variant, backbone_kwargs
+        raise ValueError(
+            f"Unsupported model_backbone '{cfg.model_backbone}'. "
+            "Expected 'efficientnet' or 'transformer'."
+        )
+
+    # ------------------------------------------------------------------
+    def _backbone_stages(self) -> Tuple[nn.Module, ...]:
+        if hasattr(self.backbone, "layers"):
+            return tuple(self.backbone.layers.children())
+        if hasattr(self.backbone, "blocks"):
+            return tuple(self.backbone.blocks.children())
+        return ()
+
+    # ------------------------------------------------------------------
     def _freeze_early_blocks(self) -> None:
-        """Freeze everything except the last 2 EfficientNet blocks."""
-        # timm EfficientNet exposes `.blocks` — a nn.Sequential of stages
-        blocks = list(self.backbone.blocks.children())
+        """Freeze everything except the last 2 backbone stages."""
+        blocks = self._backbone_stages()
         n_blocks = len(blocks)
         unfreeze_from = max(n_blocks - 2, 0)
         for i, block in enumerate(blocks):
@@ -70,15 +95,22 @@ class ImageEncoder(nn.Module):
             Shape ``(batch, T, image_feature_dim)``
         """
         B, T, C, H, W = x.shape
-        x = x.view(B * T, C, H, W)
+        x = x.reshape(B * T, C, H, W)
         feat = self.backbone(x)         # (B*T, backbone_out_dim)
         feat = self.proj(feat)          # (B*T, image_feature_dim)
-        return feat.view(B, T, -1)     # (B, T, F)
+        return feat.reshape(B, T, -1)   # (B, T, F)
 
     @property
     def last_conv(self) -> nn.Module:
-        """Return the last conv layer — useful for Grad-CAM hooks."""
-        return self.backbone.blocks[-1]
+        """Return the last spatial/attention block for Grad-CAM-style hooks."""
+        if hasattr(self.backbone, "layers"):
+            last_layer = self.backbone.layers[-1]
+            if hasattr(last_layer, "blocks") and len(last_layer.blocks) > 0:
+                return last_layer.blocks[-1]
+            return last_layer
+        if hasattr(self.backbone, "blocks"):
+            return self.backbone.blocks[-1]
+        raise AttributeError("Backbone does not expose a hookable final block")
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +283,7 @@ class SolarStormModel(nn.Module):
     """Dual-branch spatio-temporal fusion model for solar storm forecasting.
 
     Combines:
-    - ``ImageEncoder``: EfficientNet-B3 across 4 SDO time-steps
+    - ``ImageEncoder``: EfficientNet or transformer backbone across 4 SDO time-steps
     - ``TemporalEncoder``: BiLSTM over OMNI2 time-series
     - ``FusionLayer``: Cross-attention merging both branches
     - ``Decoder``: Two-head MLP (point + uncertainty)
