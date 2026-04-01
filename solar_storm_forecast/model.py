@@ -58,7 +58,8 @@ class ImageEncoder(nn.Module):
             backbone_kwargs["img_size"] = cfg.image_size
             return cfg.transformer_variant, backbone_kwargs
         raise ValueError(
-            f"Unsupported model_backbone '{cfg.model_backbone}'. "
+            f"Unsupported model_backbone '{self.model_backbone}' "
+            f"(from '{cfg.model_backbone}'). "
             "Expected 'efficientnet', 'transformer', 'swin', or 'vit'."
         )
 
@@ -69,7 +70,7 @@ class ImageEncoder(nn.Module):
         if hasattr(self.backbone, "blocks"):
             return self._module_children(self.backbone.blocks)
         raise AttributeError(
-            f"Backbone '{type(self.backbone).__name__}' does not expose .layers or .blocks for staged freezing"
+            f"Backbone '{type(self.backbone).__name__}' does not expose .layers or .blocks for staged freezing."
         )
 
     # ------------------------------------------------------------------
