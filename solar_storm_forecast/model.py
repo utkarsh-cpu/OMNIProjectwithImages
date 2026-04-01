@@ -8,7 +8,7 @@ Fusion   — Cross-attention  + MLP decoder with two heads (point & uncertainty)
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import timm
 import torch
@@ -45,8 +45,8 @@ class ImageEncoder(nn.Module):
         self._freeze_early_blocks()
 
     # ------------------------------------------------------------------
-    def _resolve_backbone_config(self, cfg: Config) -> Tuple[str, Dict[str, object]]:
-        backbone_kwargs: Dict[str, object] = {
+    def _resolve_backbone_config(self, cfg: Config) -> Tuple[str, Dict[str, Any]]:
+        backbone_kwargs: Dict[str, Any] = {
             "pretrained": True,
             "in_chans": cfg.image_channels,
             "num_classes": 0,
@@ -59,7 +59,7 @@ class ImageEncoder(nn.Module):
             return cfg.transformer_variant, backbone_kwargs
         raise ValueError(
             f"Unsupported model_backbone '{cfg.model_backbone}'. "
-            "Expected 'efficientnet' or 'transformer'."
+            "Expected 'efficientnet', 'transformer', 'swin', or 'vit'."
         )
 
     # ------------------------------------------------------------------
@@ -68,7 +68,10 @@ class ImageEncoder(nn.Module):
             return tuple(self.backbone.layers.children())
         if hasattr(self.backbone, "blocks"):
             return tuple(self.backbone.blocks.children())
-        return ()
+        raise AttributeError(
+            f"Backbone '{type(self.backbone).__name__}' does not expose"
+            " `.layers` or `.blocks` for staged freezing"
+        )
 
     # ------------------------------------------------------------------
     def _freeze_early_blocks(self) -> None:
