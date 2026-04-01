@@ -214,3 +214,4 @@ __marimo__/
 SDOBenchmark-data-full.zip
 SDOBenchmark-data-full
 checkpoints/
+*.zip

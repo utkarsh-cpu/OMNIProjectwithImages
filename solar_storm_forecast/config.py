@@ -106,7 +106,7 @@ class Config:
     checkpoint_metric: str = "val_mae_flare"
 
     # ── Model ──────────────────────────────────────────────────────────
-    model_backbone: str = "efficientnet"
+    model_backbone: str = "transformer"
     efficientnet_variant: str = "efficientnet_b3"
     transformer_variant: str = "swin_tiny_patch4_window7_224"
     image_feature_dim: int = 512
