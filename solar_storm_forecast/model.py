@@ -65,13 +65,21 @@ class ImageEncoder(nn.Module):
     # ------------------------------------------------------------------
     def _backbone_stages(self) -> Tuple[nn.Module, ...]:
         if hasattr(self.backbone, "layers"):
-            return tuple(self.backbone.layers.children())
+            return self._module_children(self.backbone.layers)
         if hasattr(self.backbone, "blocks"):
-            return tuple(self.backbone.blocks.children())
+            return self._module_children(self.backbone.blocks)
         raise AttributeError(
-            f"Backbone '{type(self.backbone).__name__}' does not expose"
-            " `.layers` or `.blocks` for staged freezing"
+            f"Backbone '{type(self.backbone).__name__}' does not expose .layers or .blocks for staged freezing"
         )
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _module_children(container: Any) -> Tuple[nn.Module, ...]:
+        if isinstance(container, nn.Module):
+            return tuple(container.children())
+        if isinstance(container, (list, tuple)):
+            return tuple(module for module in container if isinstance(module, nn.Module))
+        raise TypeError(f"Unsupported backbone container type: {type(container).__name__}")
 
     # ------------------------------------------------------------------
     def _freeze_early_blocks(self) -> None:
@@ -107,7 +115,7 @@ class ImageEncoder(nn.Module):
     def last_conv(self) -> nn.Module:
         """Return the last spatial/attention block for Grad-CAM-style hooks."""
         if hasattr(self.backbone, "layers"):
-            last_layer = self.backbone.layers[-1]
+            last_layer = self._module_children(self.backbone.layers)[-1]
             if hasattr(last_layer, "blocks") and len(last_layer.blocks) > 0:
                 return last_layer.blocks[-1]
             return last_layer
