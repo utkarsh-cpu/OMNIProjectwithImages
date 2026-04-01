@@ -79,7 +79,10 @@ class ImageEncoder(nn.Module):
         if isinstance(container, nn.Module):
             return tuple(container.children())
         if isinstance(container, (list, tuple)):
-            return tuple(module for module in container if isinstance(module, nn.Module))
+            modules = tuple(module for module in container if isinstance(module, nn.Module))
+            if len(modules) != len(container):
+                raise TypeError("Backbone container includes non-module items")
+            return modules
         raise TypeError(f"Unsupported backbone container type: {type(container).__name__}")
 
     # ------------------------------------------------------------------
@@ -117,7 +120,7 @@ class ImageEncoder(nn.Module):
         """Return the last spatial/attention block for Grad-CAM-style hooks."""
         if hasattr(self.backbone, "layers"):
             last_layer = self._module_children(self.backbone.layers)[-1]
-            if hasattr(last_layer, "blocks") and len(last_layer.blocks) > 0:
+            if hasattr(last_layer, "blocks") and last_layer.blocks is not None and len(last_layer.blocks) > 0:
                 return last_layer.blocks[-1]
             return last_layer
         if hasattr(self.backbone, "blocks"):
